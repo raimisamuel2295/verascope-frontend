@@ -652,17 +652,28 @@
   </div>
 </footer>
 
+<script type="module">
+  /* ---- Hugging Face Space client ----
+     This connects to the Gradio Space "raimisamuel/verascope-api" and exposes
+     a small helper (window.verascopePredict) that the rest of the page's
+     script calls. No server of your own is needed — Hugging Face hosts and
+     runs the model. If you ever move the Space, just change HF_SPACE below. */
+  import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js";
+
+  var HF_SPACE = "raimisamuel/verascope-api";
+  var clientPromise = Client.connect(HF_SPACE);
+
+  window.verascopePredict = async function(file){
+    var client = await clientPromise;
+    var response = await client.predict("/predict_image", {
+      image: handle_file(file)
+    });
+    return response.data && response.data.length ? response.data[0] : response.data;
+  };
+</script>
 <script>
 (function(){
   "use strict";
-
-  /* ---- backend endpoint ----
-     This must point at your running FastAPI app (app/main.py + app/model.py),
-     e.g. started with:  uvicorn app.main:app --reload
-     Change host/port below if your server runs somewhere else. Your FastAPI
-     app also needs CORSMiddleware enabled so the browser is allowed to call
-     it from this page. */
-  var API_URL = 'https://verascope.onrender.com/predict';
 
   /* ---- nav scroll state ---- */
   var header = document.getElementById('siteHeader');
@@ -913,33 +924,29 @@
       waitingNote.textContent = 'Almost there — larger models can take a little longer on the first request.';
     }, 18000);
 
-    /* ---- send the image to the FastAPI backend (app/main.py -> app/model.py) ---- */
-    var formData = new FormData();
-    formData.append('image', file, file.name || 'upload.png');
+    /* ---- send the image to the Hugging Face Space (raimisamuel/verascope-api) ---- */
+    if(typeof window.verascopePredict !== 'function'){
+      clearTimeout(stepTimer);
+      clearTimeout(longWaitTimer);
+      clearTimeout(longerWaitTimer);
+      loadingIndicator.style.display = 'none';
+      steps.forEach(function(s){ s.classList.remove('active','done'); });
+      resultContent.classList.remove('show');
+      resultEmpty.style.display = 'block';
+      showError('Could not reach the prediction server: still loading, please try again in a moment.');
+      analyzing = false;
+      return;
+    }
 
-    fetch(API_URL, {
-      method: 'POST',
-      body: formData
-    })
-    .then(function(response){
-      if(!response.ok){
-        return response.json()
-          .then(function(err){ throw new Error(err.detail || ('Server error (' + response.status + ')')); })
-          .catch(function(parseErr){
-            if(parseErr instanceof Error && parseErr.message.indexOf('Server error') === 0){ throw parseErr; }
-            throw new Error('Server error (' + response.status + ')');
-          });
-      }
-      return response.json();
-    })
-    .then(function(data){
+    window.verascopePredict(file)
+    .then(function(result){
       clearTimeout(stepTimer);
       clearTimeout(longWaitTimer);
       clearTimeout(longerWaitTimer);
       loadingIndicator.style.display = 'none';
       steps.forEach(function(s){ s.classList.add('done'); s.classList.remove('active'); });
       setTimeout(function(){
-        showVerdict(data);
+        showVerdict(result);
         analyzing = false;
       }, 250);
     })
@@ -951,15 +958,24 @@
       steps.forEach(function(s){ s.classList.remove('active','done'); });
       resultContent.classList.remove('show');
       resultEmpty.style.display = 'block';
-      showError('Could not reach the prediction server: ' + err.message);
+      showError('Could not reach the prediction server: ' + (err && err.message ? err.message : err));
       analyzing = false;
     });
   }
 
-  function showVerdict(data){
-    /* data = { prediction: "REAL" | "AI_GENERATED", confidence: 0..1 } from app/main.py */
-    var isAI = data.prediction === 'AI_GENERATED';
-    var confPct = Math.round(data.confidence*1000)/10;
+  function showVerdict(result){
+    /* result = { label: str, confidences: [{label, confidence}, ...] }
+       — the Gradio "Label" output shape returned by the Hugging Face Space
+       raimisamuel/verascope-api (endpoint /predict_image). */
+    var topLabel = (result && result.label != null) ? String(result.label) : '';
+    var isAI = /ai[_\s-]?generated|\bfake\b|synthetic/i.test(topLabel);
+
+    var confidence = 1;
+    if(result && Array.isArray(result.confidences) && result.confidences.length){
+      var match = result.confidences.filter(function(c){ return c.label === result.label; })[0];
+      confidence = match ? match.confidence : result.confidences[0].confidence;
+    }
+    var confPct = Math.round(confidence*1000)/10;
 
     verdictBlock.style.display = 'block';
     verdictText.textContent = isAI ? 'AI-GENERATED' : 'REAL';
