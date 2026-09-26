@@ -652,25 +652,26 @@
   </div>
 </footer>
 
-<script type="module">
-  /* ---- Hugging Face Space client ----
-     This connects to the Gradio Space "raimisamuel/verascope-api" and exposes
-     a small helper (window.verascopePredict) that the rest of the page's
-     script calls. No server of your own is needed — Hugging Face hosts and
-     runs the model. If you ever move the Space, just change HF_SPACE below. */
-  import { Client, handle_file } from "https://cdn.jsdelivr.net/npm/@gradio/client/dist/index.min.js";
+ <script>
+  window.verascopePredict = async function(file) {
+    var formData = new FormData();
+    formData.append("image", file);
 
-  var HF_SPACE = "raimisamuel/verascope-api";
-  var clientPromise = Client.connect(HF_SPACE);
-
-  window.verascopePredict = async function(file){
-    var client = await clientPromise;
-    var response = await client.predict("/predict_image", {
-      image: handle_file(file)
+    var response = await fetch("/api/predict", {
+      method: "POST",
+      body: formData
     });
-    return response.data && response.data.length ? response.data[0] : response.data;
+
+    var data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(data.error || "Prediction request failed");
+    }
+
+    return data;
   };
 </script>
+
 <script>
 (function(){
   "use strict";
